@@ -14,18 +14,22 @@
  * limitations under the License.
  */
 
-#ifndef TENSORRT_COMMON__LOGGER_HPP_
-#define TENSORRT_COMMON__LOGGER_HPP_
+#ifndef AUTOWARE__TENSORRT_COMMON__LOGGER_HPP_
+#define AUTOWARE__TENSORRT_COMMON__LOGGER_HPP_
 
+#include <NvInferRuntime.h>
+
+#include <atomic>
 #include <cassert>
+#include <cstdarg>
+#include <cstdio>
 #include <ctime>
-#include <iomanip>
 #include <iostream>
 #include <ostream>
 #include <sstream>
 #include <string>
-
-#include "NvInferRuntimeCommon.h"
+#include <thread>
+#include <vector>
 
 namespace tensorrt_common
 {
@@ -45,7 +49,7 @@ class LogStreamConsumerBuffer : public std::stringbuf
     {
     }
 
-    ~LogStreamConsumerBuffer()
+    ~LogStreamConsumerBuffer() override
     {
         // std::streambuf::pbase() gives a pointer to the beginning of the buffered part of the
         // output sequence std::streambuf::pptr() gives a pointer to the current position of the
@@ -60,7 +64,7 @@ class LogStreamConsumerBuffer : public std::stringbuf
     // synchronizes the stream buffer and returns 0 on success
     // synchronizing the stream buffer consists of inserting the buffer contents into the stream,
     // resetting the buffer and flushing the stream
-    virtual int sync()
+    int sync() override
     {
         putOutput();
         return 0;
@@ -212,7 +216,17 @@ class Logger : public nvinfer1::ILogger  // NOLINT
    public:
     //  Logger(Severity severity = Severity::kWARNING)
     //  Logger(Severity severity = Severity::kVERBOSE)
-    explicit Logger(Severity severity = Severity::kINFO) : mReportableSeverity(severity)
+    explicit Logger(Severity severity = Severity::kINFO)
+        : mReportableSeverity(severity),
+          mVerbose(true),
+          mThrottleStopFlag(false)
+    {
+    }
+
+    explicit Logger(const bool verbose, Severity severity = Severity::kINFO)
+        : mReportableSeverity(severity),
+          mVerbose(verbose),
+          mThrottleStopFlag(false)
     {
     }
 
@@ -249,8 +263,81 @@ class Logger : public nvinfer1::ILogger  // NOLINT
     //!
     void log(Severity severity, const char* msg) noexcept override
     {
-        LogStreamConsumer(mReportableSeverity, severity)
-            << "[TRT] " << std::string(msg) << std::endl;
+        if (mVerbose)
+        {
+            LogStreamConsumer(mReportableSeverity, severity)
+                << "[TRT] " << std::string(msg) << std::endl;
+        }
+    }
+
+    void log(Severity severity, const char* msg, ...) const noexcept
+    {
+        if (mVerbose)
+        {
+            va_list args;
+            va_start(args, msg);
+
+            // Buffer size
+            va_list args_copy;
+            va_copy(args_copy, args);
+            int required_size = std::vsnprintf(nullptr, 0, msg, args_copy);
+            va_end(args_copy);
+
+            // Formatting error
+            if (required_size < 0)
+            {
+                log(Severity::kINTERNAL_ERROR, "Error formatting log message");
+                va_end(args);
+                return;
+            }
+
+            // Format msg
+            std::vector<char> buffer(required_size + 1);
+            std::vsnprintf(buffer.data(), buffer.size(), msg, args);
+
+            va_end(args);  // End variadic argument processing
+
+            // Send the formatted message to LogStreamConsumer
+            LogStreamConsumer(mReportableSeverity, severity)
+                << "[TRT] " << std::string(buffer.data()) << std::endl;
+        }
+    }
+
+    /**
+     * @brief Logging with throttle.
+     *
+     * @example
+     * Logger logger();
+     * auto log_thread = logger.log_throttle(nvinfer1::ILogger::Severity::kINFO, "SOME MSG", 1);
+     * // some operation
+     * logger.stop_throttle(log_thread);
+     *
+     * @param severity
+     * @param msg
+     * @param duration
+     * @return std::thread
+     *
+     */
+    std::thread log_throttle(Severity severity, const char* msg, const int duration) noexcept
+    {
+        mThrottleStopFlag.store(false);
+        auto log_func = [this](Severity s, const char* m, const int d)
+        {
+            while (!mThrottleStopFlag.load())
+            {
+                this->log(s, m);
+                std::this_thread::sleep_for(std::chrono::seconds(d));
+            }
+        };
+
+        std::thread log_thread(log_func, severity, msg, duration);
+        return log_thread;
+    }
+
+    void stop_throttle(std::thread& log_thread) noexcept
+    {
+        mThrottleStopFlag.store(true);
+        log_thread.join();
     }
 
     //!
@@ -461,6 +548,8 @@ class Logger : public nvinfer1::ILogger  // NOLINT
     }
 
     Severity mReportableSeverity;
+    bool mVerbose;
+    std::atomic<bool> mThrottleStopFlag;
 };
 
 namespace
@@ -531,4 +620,4 @@ inline LogStreamConsumer LOG_FATAL(const Logger& logger)
 }  // anonymous namespace
 }  // namespace tensorrt_common
 
-#endif  // TENSORRT_COMMON__LOGGER_HPP_
+#endif  // AUTOWARE__TENSORRT_COMMON__LOGGER_HPP_

@@ -70,12 +70,34 @@ bool SAM2ImageEncoder::InitializeTensorRT()
 {
     try
     {
-        // Create TrtCommon instance
+        // Create TrtCommon instance first (without setup)
         trt_encoder_ =
             std::make_unique<tensorrt_common::TrtCommon>(trt_config_, profiler_, plugin_paths_);
 
-        // Setup the TensorRT engine
-        if (!trt_encoder_->setup())
+        // Create optimization profile for dynamic shapes
+        // Use default tensor name for now
+        auto profile_dims = std::make_unique<std::vector<tensorrt_common::ProfileDims>>();
+        nvinfer1::Dims min_input = CreateDims({1, 3, input_height_, input_width_});
+        nvinfer1::Dims opt_input = CreateDims({4, 3, input_height_, input_width_});
+        nvinfer1::Dims max_input = CreateDims({32, 3, input_height_, input_width_});
+
+        // Use common tensor names for SAM2 encoder input
+        const char* input_names[] = {"input", "images", "image", "x"};
+
+        // Try the most common name first
+        profile_dims->emplace_back(input_names[0], min_input, opt_input, max_input);
+
+        std::cout << "Creating optimization profile for input tensor: " << input_names[0]
+                  << std::endl;
+        std::cout << "Min: [" << min_input.d[0] << "," << min_input.d[1] << "," << min_input.d[2]
+                  << "," << min_input.d[3] << "]" << std::endl;
+        std::cout << "Opt: [" << opt_input.d[0] << "," << opt_input.d[1] << "," << opt_input.d[2]
+                  << "," << opt_input.d[3] << "]" << std::endl;
+        std::cout << "Max: [" << max_input.d[0] << "," << max_input.d[1] << "," << max_input.d[2]
+                  << "," << max_input.d[3] << "]" << std::endl;
+
+        // Setup the TensorRT engine with optimization profile
+        if (!trt_encoder_->setup(std::move(profile_dims), nullptr))
         {
             std::cerr << "Failed to setup TensorRT engine" << std::endl;
             return false;
@@ -112,6 +134,13 @@ bool SAM2ImageEncoder::ValidateTensorConfiguration()
         }
         std::cout << "]" << std::endl;
 
+        // Check if this is the input tensor and has dynamic shapes
+        if (i == 0)
+        {  // Assuming first tensor is input
+            std::cout << "Using tensor '" << tensor_name << "' as input tensor" << std::endl;
+            // Don't update tensor_names_.input here since it's const char*
+        }
+
         // Store tensor information
         std::string name_str(tensor_name);
         network_io_map_.emplace(name_str, tensorrt_common::NetworkIO(name_str, dims));
@@ -122,8 +151,8 @@ bool SAM2ImageEncoder::ValidateTensorConfiguration()
 
 bool SAM2ImageEncoder::GetInputDetails()
 {
-    // Try to get input tensor dimensions
-    nvinfer1::Dims input_dims = trt_encoder_->getTensorShape(tensor_names_.input);
+    // Try to get input tensor dimensions (use index 0 for first tensor)
+    nvinfer1::Dims input_dims = trt_encoder_->getTensorShape(0);
 
     if (input_dims.nbDims >= 4)
     {
@@ -539,12 +568,25 @@ tensorrt_common::ProfileDimsPtr SAM2ImageEncoder::CreateOptimizationProfile()
 {
     auto profile_dims = std::make_unique<std::vector<tensorrt_common::ProfileDims>>();
 
+    // Get the actual input tensor name from the model
+    const char* actual_input_name = trt_encoder_->getIOTensorName(0);
+
     // Add optimization profiles for dynamic tensors
     // Input: min [1,3,H,W], opt [4,3,H,W], max [32,3,H,W]
     nvinfer1::Dims min_input = CreateDims({1, 3, input_height_, input_width_});
     nvinfer1::Dims opt_input = CreateDims({4, 3, input_height_, input_width_});
     nvinfer1::Dims max_input = CreateDims({32, 3, input_height_, input_width_});
-    profile_dims->emplace_back(tensor_names_.input, min_input, opt_input, max_input);
+    profile_dims->emplace_back(actual_input_name, min_input, opt_input, max_input);
+
+    // Print debug information
+    std::cout << "Creating optimization profile for input tensor: " << actual_input_name
+              << std::endl;
+    std::cout << "Min: [" << min_input.d[0] << "," << min_input.d[1] << "," << min_input.d[2] << ","
+              << min_input.d[3] << "]" << std::endl;
+    std::cout << "Opt: [" << opt_input.d[0] << "," << opt_input.d[1] << "," << opt_input.d[2] << ","
+              << opt_input.d[3] << "]" << std::endl;
+    std::cout << "Max: [" << max_input.d[0] << "," << max_input.d[1] << "," << max_input.d[2] << ","
+              << max_input.d[3] << "]" << std::endl;
 
     return profile_dims;
 }

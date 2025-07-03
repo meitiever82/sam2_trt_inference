@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
-
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -76,8 +74,7 @@ void ProcessImage(std::string& encoder_path,
             std::filesystem::path bb_file_path =
                 std::filesystem::path(bbox_file_path) / bb_file_name;
             images_batch.push_back(cv::imread(image_path.string()));
-            std::vector<cv::Rect> box_coords =
-                ReadAndTransformCoordinates(bb_file_path.string());
+            std::vector<cv::Rect> box_coords = ReadAndTransformCoordinates(bb_file_path.string());
             box_coords_batch.push_back(box_coords);
         }
 
@@ -119,21 +116,30 @@ int main(int argc, char** argv)
     argparse::ArgumentParser program("sam2_ort_cpp");
 
     // Define positional arguments
-    program.add_argument("encoder_path").help("Path to the encoder ONNX model file");
+    program.add_argument("encoder_path")
+        .help("Path to the encoder ONNX model file")
+        .default_value(std::string("../models/sam2.1_hiera_base_plus_encoder.onnx"));
 
-    program.add_argument("decoder_path").help("Path to the decoder ONNX model file");
+    program.add_argument("decoder_path")
+        .help("Path to the decoder ONNX model file")
+        .default_value(std::string("../models/sam2.1_hiera_base_plus_decoder.onnx"));
 
-    program.add_argument("img_folder_path").help("Path to the input images folder");
+    program.add_argument("img_folder_path")
+        .help("Path to the input images folder")
+        .default_value(std::string("../sample_data/images"));
 
-    program.add_argument("bbox_file_folder_path").help("Path to the bounding box files' folder");
+    program.add_argument("bbox_file_folder_path")
+        .help("Path to the bounding box files' folder")
+        .default_value(std::string("../sample_data/bboxes"));
 
     program.add_argument("output_folder_path")
-        .help("Path to folder for saving the output image file");
+        .help("Path to folder for saving the output image file")
+        .default_value(std::string("../output"));
 
     // Define optional arguments
     program.add_argument("--precision")
         .help("Model precision (e.g., fp32 or fp16)")
-        .default_value(std::string("fp32"));
+        .default_value(std::string("fp16"));
 
     program.add_argument("--decoder_batch_limit")
         .help("Decoder batch limit")
